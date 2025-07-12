@@ -6,16 +6,15 @@ Config = {}
 Config.language = 'en'
 
 -- These are default keys to interact with dolu_tool commands.
--- You can also override them in your pause menu, at the very bottom of FiveM keybinds section.
+-- You can also override them in your pause menu, in the FiveM keybinds section.
 Config.openMenuKey = 'F3'
 Config.toggleNoclipKey = 'F11'
 Config.teleportMarkerKey = 'F10'
 
 Config.favoriteVehicle = 'adder'
+Config.customVehiclePlate = '~DOLU~' -- Remove the text if you don't want a custom plate.
 
--- Use this function to check if a player is allowed to use dolu_tool features.
--- By default, the function returns true, meaning everyone can use dolu_tool.
--- 'type' can be 'menu', 'noclip', 'teleport' or 'target'
-Config.permission = function(type)
-    return true
-end
+-- Permission system based on ace permissions.
+-- If Config.permission is set to false, everyone will have access to the menu.
+Config.usePermission = false
+Config.permission = { 'group.admin', 'qbcore.dev' }

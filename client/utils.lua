@@ -24,7 +24,7 @@ Utils.openUI = function()
     SendNUIMessage({
         action = 'setMenuVisible',
         data = {
-            version = Client.version or { currentVersion = 'Development 🛠️' },
+            version = Client.version,
             lastLocation = Client.lastLocation,
             position = coords.x .. ', ' .. coords.y .. ', ' .. coords.z
         }
@@ -261,22 +261,20 @@ Utils.freezePlayer = function(state, vehicle)
     SetPlayerControl(playerId, not state, 1 << 8)
     SetPlayerInvincible(playerId, state)
     FreezeEntityPosition(entity, state)
-    SetEntityCollision(entity, not state)
+    SetEntityCollision(entity, not state, vehicle)
 
     if not state and vehicle then
         SetVehicleOnGroundProperly(entity)
     end
 end
 
-Utils.setPlayerCoords = function(vehicle, x, y, z, heading)
-    if vehicle then
-        return SetPedCoordsKeepVehicle(cache.ped, x, y, z)
-    end
+Utils.setPlayerCoords = function(x, y, z, heading, withVehicle)
+    local entity = withVehicle and cache.seat == -1 and cache.vehicle or cache.ped
 
-    SetEntityCoords(cache.ped, x, y, z, false, false, false, false)
+    SetEntityCoordsNoOffset(entity, x, y, z, false, false, false)
 
     if heading then
-        SetEntityHeading(cache.ped, heading)
+        SetEntityHeading(entity, heading)
     end
 end
 
@@ -297,38 +295,38 @@ Utils.teleportPlayer = function(coords, updateLastCoords)
 
     if Client.noClip then
         if updateLastCoords then
-            lastCoords = vec4(GetEntityCoords(cache.ped).xyz, GetEntityHeading(cache.ped))
+            local lastCoords = GetEntityCoords(cache.ped)
+            Client.lastCoords = vec4(lastCoords.x, lastCoords.y, lastCoords.z, GetEntityHeading(cache.ped))
         end
-        setGameplayCamCoords(coords)
+
+        SetGameplayCamCoords(vec3(coords.x, coords.y, coords.z + 0.5))
+        return
     end
 
-    RequestCollisionAtCoord(coords.x, coords.y, coords.z)
     DoScreenFadeOut(150)
 
     while not IsScreenFadedOut() do
         Wait(0)
     end
 
-    local vehicle = cache.seat == -1 and cache.vehicle
-
-    Utils.freezePlayer(true, vehicle)
+    local isDriving = cache.seat == -1
+    local entity = isDriving and cache.vehicle or cache.ped
 
     if updateLastCoords then
-        lastCoords = vec4(GetEntityCoords(cache.ped).xyz, GetEntityHeading(cache.ped))
+        local lastCoords = GetEntityCoords(entity)
+        Client.lastCoords = vec4(lastCoords.x, lastCoords.y, lastCoords.z, GetEntityHeading(entity))
     end
 
-    while not IsScreenFadedOut() do
-        Wait(0)
-    end
-
-    SetEntityCoordsNoOffset(cache.ped, coords.x, coords.y, coords.z, false, false, false)
-    SetEntityHeading(cache.ped, coords.w or 0)
+    RequestCollisionAtCoord(coords.x, coords.y, coords.z)
+    Utils.freezePlayer(true, true)
+    SetEntityCoordsNoOffset(entity, coords.x, coords.y, coords.z, false, false, false)
+    SetEntityHeading(entity, coords.w or 0)
     SetGameplayCamRelativeHeading(0)
 
     Wait(500)
 
-    DoScreenFadeIn(500)
-    Utils.freezePlayer(false, vehicle)
+    DoScreenFadeIn(250)
+    Utils.freezePlayer(false, isDriving)
 
     GetInteriorData()
 end
@@ -369,7 +367,11 @@ Utils.spawnVehicle = function(model, coords)
     TaskWarpPedIntoVehicle(playerPed, vehicle, -1)
     SetVehRadioStation(vehicle, 'OFF')
     SetVehicleDirtLevel(vehicle, 0.0)
-    SetVehicleNumberPlateText(vehicle, '~DOLU~')
+
+    if Config.customVehiclePlate and Config.customVehiclePlate ~= '' then
+        SetVehicleNumberPlateText(vehicle, Config.customVehiclePlate)
+    end
+
     cache.vehicle = vehicle
 end
 
@@ -430,7 +432,7 @@ Utils.rotationToDirection = function(rotation)
 end
 
 Utils.initTarget = function()
-    if not Config.permission('target') then return end
+    if Config.usePermission and not lib.callback.await('dolu_tool:isAllowed', 100, true) then return end
 
     exports.ox_target:addGlobalObject({
         {
@@ -452,18 +454,6 @@ Utils.initTarget = function()
             onSelect = function(data)
                 local coords = GetEntityCoords(data.entity)
                 lib.setClipboard(coords.x .. ', ' .. coords.y .. ', ' .. coords.z)
-                lib.notify({ type = 'success', description = locale('copied_coords_clipboard') })
-            end
-        },
-        {
-            name = 'ox:option1',
-            icon = 'fa-solid fa-clipboard-list',
-            label = 'Copy coords (vector4)',
-            distance = 10,
-            onSelect = function(data)
-                local coords = GetEntityCoords(data.entity)
-                local heading = GetEntityHeading(data.entity)
-                lib.setClipboard(coords.x .. ', ' .. coords.y .. ', ' .. coords.z .. ', ' .. heading)
                 lib.notify({ type = 'success', description = locale('copied_coords_clipboard') })
             end
         },
@@ -591,8 +581,7 @@ Utils.getClosestStaticEmitter = function()
         action = 'setClosestEmitter',
         data = {
             distance = closestDistance,
-            coords = math.floor(closestEmitter.coords.x, 3) ..
-                ', ' .. math.floor(closestEmitter.coords.y, 3) .. ', ' .. math.floor(closestEmitter.coords.z, 3),
+            coords = math.floor(closestEmitter.coords.x, 3) .. ', ' .. math.floor(closestEmitter.coords.y, 3) .. ', ' .. math.floor(closestEmitter.coords.z, 3),
             name = closestEmitter.name,
             flags = closestEmitter.flags,
             interior = closestEmitter.interior,
@@ -645,14 +634,12 @@ Utils.raycast = function(maxDistance, ignore)
     screenPosition = vec2(screenPosition.x - 0.5, screenPosition.y - 0.5) * 2.0
 
     local fovRadians = (fov * 3.14) / 180.0
-    local to = camPos + camForward + (camRight * screenPosition.x * fovRadians * GetAspectRatio(false) * 0.534375) -
-        (camUp * screenPosition.y * fovRadians * 0.534375)
+    local to = camPos + camForward + (camRight * screenPosition.x * fovRadians * GetAspectRatio(false) * 0.534375) - (camUp * screenPosition.y * fovRadians * 0.534375)
 
     local direction = (to - camPos) * maxDistance
     local endPoint = camPos + direction
 
-    local rayHandle = StartExpensiveSynchronousShapeTestLosProbe(camPos.x, camPos.y, camPos.z, endPoint.x, endPoint.y,
-        endPoint.z, -1, ignore, 0)
+    local rayHandle = StartExpensiveSynchronousShapeTestLosProbe(camPos.x, camPos.y, camPos.z, endPoint.x, endPoint.y, endPoint.z, -1, ignore, 0)
     local result, hit, endCoords, surfaceNormal, entityhit = GetShapeTestResult(rayHandle)
 
     return result, hit, endCoords, surfaceNormal, entityhit
